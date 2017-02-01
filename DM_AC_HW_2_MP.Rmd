@@ -142,7 +142,7 @@ model.1.e
 ##### **(f)** Use the `smooth.spline` command with `cv = TRUE` to fit a smoothing spline to the first half of the data (x <= 5.0).  What degrees of freedom does the CV routine select for this smoothing spline?
 
 ```{r}
-model.1.f = with(spline.data[x<5,],smooth.spline(x,y,cv=TRUE))
+model.1.f = with(spline.data[spline.data$x<5,],smooth.spline(x,y,cv=TRUE))
 model.1.f
 ```
 
@@ -151,7 +151,7 @@ model.1.f
 ##### **(g)** Repeat part (f), this time fitting the smoothing spline on just the second half of the data (`x` > 5.0).  How does the optimal choice for the second half of the data compare to the optimal choice for the first half.  Are they very different?  Can you explain what's happening?
 
 ```{r}
-model.1.g = with(spline.data[x>=5,],smooth.spline(x,y,cv=TRUE))
+model.1.g = with(spline.data[spline.data$x>=5,],smooth.spline(x,y,cv=TRUE))
 model.1.g
 ```
 
@@ -234,67 +234,33 @@ smoothCV <- function(x, y, K = 10, df.min = 1, df.max = 10) {
     unit = c(rep(floor(n/K)+1,yushu),rep(floor(n/K),K-yushu))
   }
   
-  ### apply poly
+ 
   for(df in df.min:df.max){
-    MSE = c()
+    MSE.poly = c()
+    MSE.cubic.spline = c()
+    MSE.smooth.spline = c()
     count = 0
     for(i in 1:K){
       current = (count+1):(count+unit[i]);
       test = full[current,]
       train = full[-current,]
+       ### apply poly
       temp.poly = lm(y~poly(x,df),data=train)
-      MSE = c(MSE,mean((predict(temp.poly,test)-test$y)^2))
+      MSE.poly = c(MSE.poly,mean((predict(temp.poly,test)-test$y)^2))
+       ### apply cubic.spline
+      temp.bs = lm(y~bs(x,df=df),data=train)
+      MSE.cubic.spline = c(MSE.cubic.spline,mean((predict(temp.bs,test)-test$y)^2))
+       ### apply smooth.spline
+      temp.sp = with(train,smooth.spline(x,y,df=df))
+      MSE.smooth.spline = c(MSE.smooth.spline,mean((predict(temp.sp,test$x)$y-test$y)^2))
+    
       count = count+unit[i]
     }
-    df.col = c(df.col,df)
-    method.col = c(method.col,"poly")
-    cv.error.col = c(cv.error.col,round(sum(unit/n*MSE),1))
-  }
-
-  ### apply cubic.spline
-  for(df in df.min:df.max){
-    if(df<3){
-      df.col = c(df.col,df)
-      method.col = c(method.col,"cubic.spline")
-      cv.error.col = c(cv.error.col,NA)
-    }else{
-      MSE = c()
-      count = 0
-      for(i in 1:K){
-        current = (count+1):(count+unit[i]);
-        test = full[current,]
-        train = full[-current,]
-        temp.bs = lm(y~bs(x,df),data=train)
-        MSE = c(MSE,mean((predict(temp.bs,test)-test$y)^2))
-        count = count+unit[i]
-      }
-      df.col = c(df.col,df)
-      method.col = c(method.col,"cubic.spline")
-      cv.error.col = c(cv.error.col,round(sum(unit/n*MSE),1))
-    }
-  }
-  
-  ### apply smooth.spline
-  for(df in df.min:df.max){
-    if(df<=1){
-      df.col = c(df.col,df)
-      method.col = c(method.col,"smoothing.spline")
-      cv.error.col = c(cv.error.col,NA)
-    }else{
-      MSE = c()
-      count = 0
-      for(i in 1:K){
-        current = (count+1):(count+unit[i]);
-        test = full[current,]
-        train = full[-current,]
-        temp.sp = with(train,smooth.spline(x,y,df=df))
-        MSE = c(MSE,mean((predict(temp.sp,test$x)$y-test$y)^2))
-        count = count+unit[i]
-      }
-      df.col = c(df.col,df)
-      method.col = c(method.col,"smoothing.spline")
-      cv.error.col = c(cv.error.col,round(sum(unit/n*MSE),1))
-    }
+    df.col = c(df.col,rep(df,3))
+    method.col = c(method.col,c("poly","cubic.spline","smoothing.spline"))
+    cv.error.col = c(cv.error.col,round(sum(unit/n*MSE.poly),1))
+    cv.error.col = c(cv.error.col,round(sum(unit/n*MSE.cubic.spline),1))
+    cv.error.col = c(cv.error.col,round(sum(unit/n*MSE.smooth.spline),1))
   }
   
   result = data.frame(df=df.col,method=method.col,cv.error=cv.error.col)
@@ -343,7 +309,7 @@ plot.smoothCV <- function(smoothcv.err, K, title.text = "", y.scale.factor = NUL
 
 **Hint:** Use the `y.scale.factor` argument of your `plot.smoothCV` function wisely.  If you see that a particular model's error starts to blow up as `df` increases, you should set `y.scale.factor` appropriately to prevent the extremely large error estimates from misleading you in your assessment of which model to use.
 
-```{r}
+```{r warning=FALSE}
 #mnth
 smoothcv.err.mnth=smoothCV(bikes$mnth,bikes$cnt,10,1,10)
 plot.smoothCV(smoothcv.err.mnth,10,"mnth",1.01)
@@ -366,16 +332,11 @@ plot.smoothCV(smoothcv.err.windspeed,10,"windspeed",1.05)
 ##### **(d)** Use the `gam` library and the models you selected in part (c) to fit an additive model of `cnt` on `mnth`, `atemp`, `hum` and `windspeed`.  Use the `plot` command on your fitted `glm` object with the arguments `se = TRUE, col = 'steelblue', lwd = 3` to produce plots of the fitted curves. (See `?plot.gam` for details.)
 
 ```{r}
-model.2.d = gam(cnt~s(atemp,bs="cr",k=7)+s(mnth,bs="cr",k=6)+poly(hum,3)+s(windspeed,bs="cr",k=6),data=bikes)
+model.2.d = gam(cnt~bs(atemp,6)+bs(mnth,6)+poly(hum,3)+bs(windspeed,6),data=bikes)
 # Ensure that all 4 model fits appear in the same figure
 par(mfrow = c(1,4))
 # Write your plot() command below this comment
 plot(model.2.d,se=TRUE,col='steelblue',lwd=3)
-
-# trial
-model.test=gam(cnt~poly(hum,3)+mnth,data=bikes)
-par(mfrow = c(1,2))
-plot(model.test,se=TRUE,col='steelblue',lwd=3)
 ```
 
 ##### **(e)** Use your model from part **(d)** to calculate the "% deviance explained" by your model.  
@@ -397,4 +358,4 @@ model.2.f = lm(cnt~atemp+mnth+hum+windspeed,data=bikes)
 summary(model.2.f)
 ```
 
-- **Linear model R square is 0.4889 while the additive model's R square is ..**
+- **Linear model R square is 0.4889 while the additive model's R square is 0.6153**
