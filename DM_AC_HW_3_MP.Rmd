@@ -1,0 +1,370 @@
+---
+title: "Homework 3: Variable selection in Regression"
+author: "Miranda Pan"
+date: 'Assigned: February 1, 2017'
+output: 
+  html_document:
+    toc: true
+    toc_depth: 5
+    theme: cerulean
+    highlight: tango
+---
+
+### Revision notes:
+
+##### This homework is due by **5:50PM on Wednesday, February 8**.  
+
+##### To complete this assignment, follow these steps:
+
+1. Download the `homework3.Rmd` file from Blackboard or the course website.
+
+2. Open `homework3.Rmd` in RStudio.
+
+3. Replace the "Your Name Here" text in the `author:` field with your own name.
+
+4. Supply your solutions to the homework by editing `homework3.Rmd`.
+
+5. When you have completed the homework and have **checked** that your code both runs in the Console and knits correctly when you click `Knit HTML`, rename the R Markdown file to `homework3_YourNameHere.Rmd`, and submit both the `.Rmd` file and the `.html` output file on Blackboard.  (YourNameHere should be changed to your own name.)
+
+##### Homework tips:
+
+1. Recall the following useful RStudio hotkeys.
+
+Keystroke | Description
+-----------------------|----------------------------------------------------
+`<tab>` | Autocompletes commands and filenames, and lists arguments for functions.
+`<up>` | Cycles through previous commands in the console prompt
+`<ctrl-up>` | Lists history of previous commands matching an unfinished one
+`<ctrl-enter>` | Runs current line from source window to Console. Good for trying things out ideas from a source file.
+`<ESC>` | Aborts an unfinished command and get out of the + prompt
+
+**Note**: Shown above are the Windows/Linux keys.  For Mac OS X, the `<ctrl>` key should be substituted with the `<command>` (&#8984;) key.
+
+2. Instead of sending code line-by-line with `<ctrl-enter>`, you can send entire code chunks, and even run all of the code chunks in your .Rmd file. Look under the <Chunks> menu of the Source panel.
+
+3. Run your code in the Console and Knit HTML frequently to check for errors.
+
+4. You may find it easier to solve a problem by interacting only with the Console at first, or by creating a separate `.R` source file that contains only R code and no Markdown.
+
+### Preamble: Loading packages and data
+
+**DO NOT CHANGE ANYTHING ABOUT THIS CODE!**
+
+```{r}
+library(ggplot2)
+library(ISLR)
+library(glmnet)
+library(leaps)  # needed for regsubsets
+library(boot)   # needed for cv.glm
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+options(scipen = 4)
+
+# Online news share count data
+set.seed(212017)
+online.news <- read.csv("http://www.andrew.cmu.edu/user/achoulde/95791/data/online_news.csv")
+# subsample the data to reduce data size
+num.noise <- 50
+news <- data.frame(online.news, 
+                   matrix(rnorm(num.noise * nrow(online.news)), 
+                            nrow = nrow(online.news))
+                   )
+# Extract covariates matrix (for lasso)
+news.x <- as.matrix(news[, -which(names(news) == "shares")])
+# Extract response variable (for lasso)
+news.y <- news$shares
+```
+
+### Data dictionary
+
+If you want to learn more about this data set, you can have a look at the data dictionary provided here: [Data dictionary for news share data](http://www.andrew.cmu.edu/user/achoulde/95791/data/OnlineNewsPopularity.names.txt).
+
+### Problem 1
+
+> This question walks you through a comparison of three variable selection procedures we discussed in class.  
+
+##### **(a)** Use the `glm` command to fit a linear regression of `shares` on all the other variables in the `news` data set.  Print the names of the predictors whose coefficient estimates are statistically significant at the 0.05 level.  Are any of the "noise" predictors statistically significant? (Recall that "noise" predictors all have variable names of the form X#.)
+
+```{r}
+model.1.a <- glm(shares~.,data=news)
+summary(model.1.a)
+dimnames(summary(model.1.a)$coefficient)[[1]][coef(summary(model.1.a))[,4]<0.05]
+```
+
+<font color="#157515">
+
+- **Yes. Noise predictors X24,X37,X41,X49 are statistically significant.**
+
+</font>
+
+
+**Hint:** To access the P-value column of a fitted model named `my.fit`, you'll want to look at the `coef(summary(my.fit))` object.  If you are new to R, you may find [the following section of the 94-842 note](http://www.andrew.cmu.edu/user/achoulde/94842/lectures/lecture08/lecture08-94842.html#exploring-the-lm-object) helpful.  
+
+##### **(b)** Use the `cv.glm` command with 10-fold cross-validation to estimate the test error of the model you fit in part (a).  Repeat with number of folds `K = 5, 7, 10, 15, 20, 25, 50` (use a loop).  
+
+##### Calculate the standard deviation of your CV estimates divided by the mean of the estimates.  This quantity is called the [coefficient of variation](https://en.wikipedia.org/wiki/Coefficient_of_variation).  Do the error estimates change much across the different choices of $K$?
+
+```{r, cache = TRUE, warning=FALSE}
+K.list = c(5,7,10,15,20,25,50)
+test.error.list = c()
+test.error.adj.list = c()
+for(k in K.list){
+  test.error.list = c(test.error.list, cv.glm(news,model.1.a,K=k)$delta[1])
+  test.error.adj.list = c(test.error.list, cv.glm(news,model.1.a,K=k)$delta[2])
+}
+data.frame
+qplot(x=K.list,y=test.error.list)
+sd(test.error.list)/mean(test.error.list)
+```
+
+<font color="#157515">
+
+- **Yes. The variance of the prediction error is 6% of the mean.**
+
+</font>
+
+**Note**: This loop may take a few minutes to run.  I have supplied the argument cache = TRUE in the header to prevent the code from needing to re-execute every time you knit.  This code chunk will re-execute only if the code it contains gets changed.  
+
+##### **(c)** The code below produces estimates of test error using the validation set approach.  Run this code 50 times (put the code in a loop).  Calculate the standard deviation of the estimates divided by the mean of the estimates.  Are the answers you get more or less variable than your answers from part **(b)**?
+
+```{r, cache = TRUE, warnings = FALSE}
+####
+## Modify the code below as necessary to answer the question.
+####
+# Form a random split
+rand.split <- sample(cut(1:nrow(news), breaks = 2, labels = FALSE))
+# Fit model on first part
+news.glm.train <- glm(shares ~ ., data = news[rand.split == 1,])
+# Predict on the second part
+news.glm.pred <- predict(news.glm.train, newdata = news[rand.split == 2, ])
+# Calculate MSE on the second part
+mean((news$shares[rand.split == 2] - news.glm.pred)^2)
+```
+
+<font color="#157515">
+
+- **The answer is less variable than in part (b). However, the difference is about inside the 16% range.**
+
+</font>
+
+##### **(d)** [Best subset selection] The code below performs Best Subset Selection to identify which variables in the model are most important.  We only go up to models of size 5, because beyond that the computation time starts to get excessive. 
+
+##### Which variables are included in the best model of each size?  (You will want to work with the `summary(news.subset)` or `coef(news.subset, id = )` object to determine this.)  Are the models all nested?  That is, does the best model of size k-1 always a subset of the best model of size k?  Do any "noise predictors" appear in any of the models?
+
+```{r}
+set.seed(12310)
+# Get a smaller subset of the data to work with
+# Use this ONLY for problem (d).
+news.small <- news[sample(nrow(news), 2000), ]
+```
+
+```{r, cache = TRUE}
+# Best subset selection
+news.subset <- regsubsets(shares ~ .,
+               data = news.small,
+               nbest = 1,    # 1 best model for each number of predictors
+               nvmax = 5,    # NULL for no limit on number of variables
+               method = "exhaustive", really.big = TRUE)
+
+# Add code below to answer the question
+coef(news.subset,id=1)
+coef(news.subset,id=2)
+coef(news.subset,id=3)
+coef(news.subset,id=4)
+coef(news.subset,id=5)
+
+```
+
+<font color="#157515">
+
+- **Models are not necessarily be nested. Since number of 3 and above, there is noise predictor in the models.**
+
+</font> 
+
+##### **(e)** [Forward stepwise selection] Modify the code provided in part (d) to perform Forward stepwise selection instead of exhaustive search.  There should be no limit on the maximum size of subset to consider.  
+
+**NOTE:  You will need to swap out `news.small` for the full `news` data.  You should not use `news.small` for anything other than part (d)**
+
+```{r}
+news.subset.forward <- regsubsets(shares ~ .,
+               data = news,
+               nbest = 1,    # 1 best model for each number of predictors
+               nvmax = NULL,
+               method = "forward",really.big = TRUE)
+```
+
+> Note: Parts (f) - (i) all refer to the results produced by Forward stepwise selection.  
+
+##### **(f)** For models of size 1:12, display the variables that appear in each model.  Are the models all nested?  Do any "noise predictors" appear in any of the models?
+
+```{r}
+coef(news.subset.forward,id=1)
+coef(news.subset.forward,id=2)
+coef(news.subset.forward,id=3)
+coef(news.subset.forward,id=4)
+coef(news.subset.forward,id=5)
+coef(news.subset.forward,id=6)
+coef(news.subset.forward,id=7)
+coef(news.subset.forward,id=8)
+coef(news.subset.forward,id=9)
+coef(news.subset.forward,id=10)
+coef(news.subset.forward,id=11)
+coef(news.subset.forward,id=12)
+```
+
+<font color="#157515">
+
+- **The models are all nested. Noise only appeared starting from size of 10.**
+
+</font>
+
+##### **(g)** When you run `summary()` on a regsubsets object you get a bunch of useful values.  Construct a plot showing R-squared on the y-axis and model size on the x-axis.  Use appropriate axis labels.  Does R-squared always increase as we increase the model size?  Explain.
+
+```{r}
+qplot(x=1:length(summary(news.subset.forward)$rsq),y=summary(news.subset.forward)$rsq)+xlab("model size")+ylab("R-square")
+```
+
+<font color="#157515">
+
+- **Yes. R-square increases as we increase model size. Because the more variables we add in, the better we would be able to explain the variable. That is the more variance which can be covered in the model.**
+
+</font>
+
+##### **(h)**  Construct a plot showing Residual sum of squares on the y-axis and model size on the x-axis.  Does the RSS always decrease as we increase the model size?  Explain.
+
+```{r}
+qplot(x=1:length(summary(news.subset.forward)$rsq),y=summary(news.subset.forward)$rss)+xlab("model size")+ylab("RSS")
+```
+
+<font color="#157515">
+
+- **RSS always decrease as we increase the model size. This is the same reason as previous problem that the more variance we try to explain in the model, the less residual left to be covered in RSS.**
+
+</font>
+
+##### **(i)** [2 points] Construct a plot showing AIC (aka Mallows Cp) on the y-axis and model size on the x-axis.  Is the curve monotonic?  Explain.  What model size minimizes AIC?  How many "noise predictors" get included in this model?
+
+```{r}
+qplot(x=1:length(summary(news.subset.forward)$rsq),y=summary(news.subset.forward)$cp)+xlab("model size")+ylab("AIC")
+coef(news.subset.forward,id=40)
+```
+
+<font color="#157515">
+
+- **Model with fourty variabes has the minimum AIC. There are 9 noise predictors in this model.**
+
+</font>
+
+##### **(j)** Construct a plot showing BIC on the y-axis and model size on the x-axis.  Is the curve monotonic?  Explain.  What model size minimizes BIC?  How many "noise predictors" get included in this model?
+
+```{r}
+qplot(x=1:length(summary(news.subset.forward)$rsq),y=summary(news.subset.forward)$bic)+xlab("model size")+ylab("BIC")
+coef(news.subset.forward,id=12)
+```
+
+<font color="#157515">
+
+- **model size of 12 minimizes BIC. One noise predictor is included. **
+
+</font>
+
+##### **(k)** [2 points]  Compare the models selected by AIC and BIC.  Is one a subset of the other?  Which criterion selects the smaller model?  Does that criterion always result in a smaller model, or is does this happen just by coincidence on the `news` data?  Explain.
+
+<font color="#157515">
+
+- **Yes. BIC is more likely to get smaller model.This will always happen because BIC is penalising more on the coefficients.**
+
+</font>
+
+> For the Lasso problems, you may find it helpful to review the code examples in the [Linear regression with glmnet](https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html#lin) vignette.  Running the glmnet command `glmnet(x = X, y = y)` where `y` is your response vector and `X` is your covariates matrix will fit a Lasso.  
+
+##### **(l)** Variables `news.x` and `news.y` were pre-constructed in the preamble to this assignment.  Use the `glmnet` command to fit a Lasso to this data.  Call the result `news.lasso`.  
+
+```{r}
+news.lasso = glmnet(x=news.x,y=news.y)
+```
+
+##### **(m)** It turns out that `news.lasso` contains model fits for an entire sequence of $\lambda$ values.  Look at the `news.lasso$lambda` attribute.  How many $\lambda$ values do we have model fits for?
+
+```{r}
+length(news.lasso$lambda)
+```
+
+<font color="#157515">
+
+- **98**
+
+</font>
+
+##### **(n)** The `coef(news.lasso, s = )` will print out the estimated coefficients for our model at any lambda value `s`.  Display the coefficient estimates for the 25th value of $\lambda$ from part (k).  How many coefficients in this model are non-zero?  How many of the non-zero coefficients come from "noise predictors"?
+
+```{r}
+news.lasso.coef<-coef(news.lasso,s=25)
+length(news.lasso$beta[,25][news.lasso$beta[,25]>0])
+news.lasso$beta[,25][news.lasso$beta[,25]>0]
+```
+
+<font color="#157515">
+
+- **12 coefficients in this model. One variable is noise predictor.**
+
+</font>
+
+##### **(o)**  Run the `plot` command on your `news.lasso` object to get a regularization plot.  Review the help file for `plot.glmnet` to figure out how to set "norm" as the x-axis variable option, and how to add labels to the curves.  In this parameterization of the x-axis, is the model fit getting more complex or less complex as the x-axis variable increases?
+
+```{r}
+plot(x = news.lasso,xvar = ("norm"), label=TRUE)
+```
+
+<font color="#157515">
+
+- **YIn this parameterization of the x-axis, the model fit is getting more complex as the x-axis variable increases.**
+
+</font>
+
+##### **(p)** `cv.glmnet(x, y)` will perform 10-fold cross-validation on the entire sequence of models fit by `glmnet(x, y)`.  Use the `cv.glmnet` command to perform cross-validation.  Save the results in a variable called `news.lasso.cv`.  Run the `plot()` command to get a CV error plot. 
+
+```{r}
+news.lasso.cv = cv.glmnet(x=news.x, y=news.y, nfolds=10)
+plot(news.lasso.cv)
+```
+
+##### **(q)** Use the `news.lasso.cv` object to figure out the value of $\lambda$ that minimizes CV error.  Which value of $\lambda$ does the 1-SE rule tell us to use? How many non-zero variables are selected by the min-CV rule and the 1-SE rule?  What is the estimated CV error for both of these models?  How many "noise predictors" get included in each model?
+
+```{r}
+# value of the 1-SE rule sugguests
+news.lasso.cv$lambda.1se
+
+# vars in 1-se Rule
+news.lasso.1se = glmnet(x=news.x,y=news.y,lambda=news.lasso.cv$lambda.1se)
+sum(news.lasso.1se$beta[,1]!=0)
+news.lasso.1se$beta[,1][news.lasso.1se$beta[,1]!=0]
+
+# vars in min-cv
+news.lasso.min = glmnet(x=news.x,y=news.y,lambda=news.lasso.cv$lambda.min)
+sum(news.lasso.min$beta[,1]!=0)
+news.lasso.min$beta[,1][news.lasso.min$beta[,1]!=0]
+```
+
+<font color="#157515">
+
+- **for 1se, 1 parameter with no noise. for min, 58 parameters with 26 noise terms.**
+
+</font>
+
+##### **(r)**  How does the CV error of the lambda-min model compare to the 10-fold CV error of the linear model you fit in part (a)?  Does it look like a model with a small number of predictors does as good a job of predicting the number of shares that a news article receives??  
+
+```{r}
+# in part (a) with linear models's 10-fold CV error
+test.error.list[3]
+
+# lambda-min model's 10-fold CV error
+news.lasso.cv$cvm[news.lasso.cv$lambda==news.lasso.cv$lambda.min]
+```
+
+<font color="#157515">
+
+- **The model with a small number of predictors does a good job of predicting the number of shares as well.**
+
+</font>
